@@ -19,7 +19,8 @@ import getpass
 import json
 
 import aiohttp
-from aidot.client import AidotClient
+from aidot.client import AidotClient, rsa_password_encrypt
+from aidot.login_const import APP_ID
 
 
 async def main() -> None:
@@ -29,7 +30,33 @@ async def main() -> None:
 
     async with aiohttp.ClientSession() as session:
         client = AidotClient(session, country, username, password)
-        login = await client.async_post_login()
+
+        # Same request the library makes, but show the server's reason on failure
+        url = f"{client._base_url}/users/loginWithFreeVerification"
+        body = {
+            "countryKey": f"region:{client.country_name.strip()}",
+            "username": username,
+            "password": rsa_password_encrypt(password),
+            "terminalId": await client.get_terminal_id(),
+            "webVersion": "0.5.0",
+            "area": "Asia/Shanghai",
+            "UTC": "UTC+8",
+        }
+        resp = await session.post(url, headers={"Appid": APP_ID, "Terminal": "app"}, json=body)
+        login = await resp.json(content_type=None)
+        if resp.status != 200 or "id" not in login:
+            print(f"\nLogin failed (HTTP {resp.status}). Server said:\n  {login}")
+            print("\nCommon causes:")
+            print("  - You sign into the AiDot app with Google/Apple/Facebook: set a password")
+            print("    in the app (Me > account > set/change password) and use that here.")
+            print("  - Wrong country: use the country picked when the account was created.")
+            print("  - Mistyped email/password (the password prompt doesn't echo).")
+            return
+        login["password"] = password
+        login["region"] = client._region
+        login["country"] = client.country_name
+        client.login_info = login
+        client.setup_discover()
         user_id = login["id"]
         data = await client.async_get_all_device()
 
